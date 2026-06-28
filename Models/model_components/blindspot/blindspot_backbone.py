@@ -5,7 +5,7 @@ from Models.model_components.common_layers import (
 )
 
 
-class AutoDriveBackbone(torch.nn.Module):
+class BlindSpotBackbone(torch.nn.Module):
     def __init__(self, width, depth, csp):
         super().__init__()
 

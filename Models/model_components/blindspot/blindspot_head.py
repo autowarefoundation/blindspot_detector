@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 
 
-class AutoDriveHead(nn.Module):
+class BlindSpotHead(nn.Module):
     """
-    Regression + classification head for AutoDrive.
+    Regression + classification head for BlindSpot.
 
     Inputs
     ------

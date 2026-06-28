@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 
-from Models.model_components.autodrive.autodrive_backbone import AutoDriveBackbone
-from Models.model_components.autodrive.autodrive_head import AutoDriveHead
+from Models.model_components.blindspot.blindspot_backbone import BlindSpotBackbone
+from Models.model_components.blindspot.blindspot_head import BlindSpotHead
 
 IMAGE_WIDTH = 1024
 IMAGE_HEIGHT = 512
@@ -14,7 +14,7 @@ _DEPTH = [1, 1, 1, 1, 1, 1]
 _CSP   = [False, True]
 
 
-class AutoDrive(nn.Module):
+class BlindSpot(nn.Module):
     """
     Shared backbone on previous and current frame.
     Head concatenates P5 maps → conv+SiLU → flatten → MLP → (d_norm, curvature, flag_logit).
@@ -22,8 +22,8 @@ class AutoDrive(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.backbone = AutoDriveBackbone(_WIDTH, _DEPTH, _CSP)
-        self.head = AutoDriveHead(
+        self.backbone = BlindSpotBackbone(_WIDTH, _DEPTH, _CSP)
+        self.head = BlindSpotHead(
             in_channels=_WIDTH[5],
             p5_h=IMAGE_HEIGHT // 32,
             p5_w=IMAGE_WIDTH // 32,
@@ -40,7 +40,7 @@ class AutoDrive(nn.Module):
         Transfer backbone weights from a trained AutoSpeed checkpoint.
 
         AutoSpeed saves its backbone under the prefix 'net.*' inside
-        ckpt['model'].state_dict().  AutoDrive's backbone has the same
+        ckpt['model'].state_dict().  BlindSpot's backbone has the same
         architecture (identical 'n' variant), so all 116 keys transfer 1-to-1
         after stripping the 'net.' prefix.
 
@@ -60,7 +60,7 @@ class AutoDrive(nn.Module):
         else:
             as_sd = ckpt  # bare state dict fallback
 
-        # Strip the 'net.' prefix to align with AutoDrive backbone key names
+        # Strip the 'net.' prefix to align with BlindSpot backbone key names
         backbone_sd = {k[4:]: v for k, v in as_sd.items() if k.startswith("net.")}
 
         ad_sd = self.backbone.state_dict()
