@@ -134,7 +134,7 @@ class BlindSpotHead(nn.Module):
         x = self.fc1(x)
         x = self.fc2(x)
 
-        # Raw classification blindspot occupnacy logits
+        # Raw classification blindspot occupancy logits
         # Shape: (B,2)
         occupancy_logits = self.occupancy_head(x)
 

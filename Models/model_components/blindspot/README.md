@@ -122,6 +122,34 @@ The backbone converts input images into compact semantic representations that co
 (B, 256, 16, 32)
 ```
 
+### Fixed Input Resolution
+The backbone is designed and trained for an input resolution of:
+
+```text
+1024 × 512
+```
+Several CTX modules are instantiated using feature-map dimensions derived from this resolution. As a result, the learned CTX parameters are tied to the expected spatial dimensions of the backbone feature maps.
+
+Changing the input resolution may therefore require updating the CTX configuration and retraining or reinitializing the affected layers.
+
+### Shared Layer Dependency
+The backbone relies on shared perception components implemented in:
+ 
+```text
+Models/model_components/common_layers.py
+```
+
+Required modules:
+
+```text
+Conv
+SPPF
+C2PSA
+CTX
+```
+
+These layers are shared with other perception models and must be available in the repository for the BlindSpot backbone to import and run successfully.
+
 ### Core Building Blocks
 
 The backbone is composed of reusable perception modules:
