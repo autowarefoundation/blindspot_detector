@@ -106,8 +106,7 @@ The backbone converts input images into compact semantic representations that co
 ### Design Goals
 
 - Lightweight architecture
-- Reuse proven AutoSpeed design principles
-- Enable future backbone weight transfer
+- Reuse proven AutoDrive design principles
 - Produce high-level scene features for temporal fusion
 
 ### Input
@@ -255,7 +254,6 @@ Key principles:
 - Binary occupancy classification
 - Temporal reasoning using consecutive frames
 - Shared backbone for both timesteps
-- Compatibility with AutoSpeed weight initialization
 - Efficient experimentation and deployment
 
 The model serves as a baseline architecture that can later be extended.

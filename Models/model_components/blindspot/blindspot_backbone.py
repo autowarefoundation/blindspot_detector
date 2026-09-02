@@ -13,7 +13,7 @@ class BlindSpotBackbone(nn.Module):
     """
     BlindSpot backbone.
 
-    Identical to AutoSpeedBackbone.
+    Identical to AutoDriveBackbone.
     Extracts a compact P5 feature representation from a single fisheye image.
 
     Input
