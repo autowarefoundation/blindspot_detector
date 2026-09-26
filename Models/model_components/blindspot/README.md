@@ -1,15 +1,14 @@
-# BlindSpot
+# BlindSpot Occupancy Classification Model
 
 BlindSpot is a temporal occupancy classification network used to determine whether a vehicle blindspot region is **FREE** or **OCCUPIED**.
-
 The model operates on two consecutive fisheye images captured from the same camera and uses temporal feature fusion to detect changes in the blindspot region.
 
 ## Problem Definition
 
 Given:
 
-- Previous image (`t-1`)
-- Current image (`t`)
+- Previous image `(t-1)`
+- Current image `(t)`
 
 Predict:
 
@@ -20,41 +19,27 @@ OCCUPIED  = 1
 
 The model performs binary classification and does not perform object detection or object localization.
 
----
-
-# Architecture
+## Architecture
 
 The network consists of three major components:
 
 ```text
 image_prev ─┐
-            │
             ▼
-      BlindSpotBackbone
+    BlindSpotBackbone
             │
-         P5_prev
-
-image_curr ─┐
+        feature_prev ─┐
+                      ├──► BlindSpotHead ──► Occupancy Logit
+        feature_curr ─┘
             │
-            ▼
-      BlindSpotBackbone
-            │
-         P5_curr
-
-            ▼
-       BlindSpotHead
-            │
-            ▼
-    Occupancy Logits
+    BlindSpotBackbone
+            ▲
+image_curr ─┘
 ```
 
-The backbone extracts semantic features independently from both images.
+The same `BlindSpotBackbone` instance processes both images, so the two timesteps share all backbone weights. The classification head concatenates the resulting feature maps along the channel dimension and predicts blindspot occupancy.
 
-The classification head fuses the temporal features and predicts blindspot occupancy.
-
----
-
-# Model Components
+## Model Components
 
 ```text
 blindspot_network.py
@@ -62,46 +47,40 @@ blindspot_backbone.py
 blindspot_head.py
 ```
 
----
+## `blindspot_network.py`
 
-# blindspot_network.py
-
-## Purpose
+### Purpose
 
 Top-level model definition.
-
 This file assembles all BlindSpot components into a single network and defines the forward pass used during training and inference.
 
 ### Responsibilities
 
-- Create backbone
-- Create classification head
-- Process previous frame
-- Process current frame
-- Produce occupancy logits
+- Create the shared backbone
+- Create the classification head
+- Process the previous frame
+- Process the current frame
+- Produce a raw occupancy logit
 
 ### Input
 
-```python
+```text
 image_prev : (B, 3, 512, 1024)
 image_curr : (B, 3, 512, 1024)
 ```
 
 ### Output
 
-```python
-occupancy_logits : (B, 2)
+```text
+occupancy_logit : (B, 1)
 ```
 
----
+## `blindspot_backbone.py`
 
-# blindspot_backbone.py
+### Purpose
 
-## Purpose
-
-Feature extraction backbone.
-
-The backbone converts input images into compact semantic representations that contain scene context required for occupancy reasoning.
+Feature-extraction backbone.
+The backbone converts input images into compact semantic representations that contain the scene context required for occupancy reasoning.
 
 ### Design Goals
 
@@ -111,143 +90,155 @@ The backbone converts input images into compact semantic representations that co
 
 ### Input
 
-```python
+```text
 (B, 3, 512, 1024)
 ```
 
 ### Output
 
-```python
+With the default BlindSpot configuration:
+
+```text
 (B, 256, 16, 32)
 ```
 
 ### Fixed Input Resolution
-The backbone is designed and trained for an input resolution of:
+
+The current architecture is configured for an input resolution of:
 
 ```text
 1024 × 512
 ```
-Several CTX modules are instantiated using feature-map dimensions derived from this resolution. As a result, the learned CTX parameters are tied to the expected spatial dimensions of the backbone feature maps.
 
-Changing the input resolution may therefore require updating the CTX configuration and retraining or reinitializing the affected layers.
+Several `CTX` modules are instantiated using feature-map dimensions derived from this resolution. The `BlindSpotHead` is also sized for the resulting `16 × 32` P5 feature map.
+
+Changing the input resolution therefore requires corresponding updates to the `CTX` configuration and head dimensions, and may require retraining or reinitializing affected layers.
 
 ### Shared Layer Dependency
-The backbone relies on shared perception components implemented in:
- 
+
+The backbone relies on shared perception components imported from:
+
 ```text
-Models/model_components/common_layers.py
+Models.model_components.blindspot.common_layers
 ```
 
 Required modules:
 
-```text
-Conv
-SPPF
-C2PSA
-CTX
-```
+- `Conv`
+- `SPPF`
+- `C2PSA`
+- `CTX`
 
-These layers are shared with other perception models and must be available in the repository for the BlindSpot backbone to import and run successfully.
+These modules must be available for the BlindSpot backbone to import and run successfully.
 
 ### Core Building Blocks
 
 The backbone is composed of reusable perception modules:
 
-- Conv
-- SPPF
-- C2PSA
-- CTX
+- `Conv`
+- `SPPF`
+- `C2PSA`
+- `CTX`
 
-These modules progressively increase receptive field and semantic richness while reducing spatial resolution.
+These modules progressively increase the receptive field and semantic richness while reducing spatial resolution.
 
----
+## `blindspot_head.py`
 
-# blindspot_head.py
-
-## Purpose
+### Purpose
 
 Temporal occupancy classifier.
-
 This module combines features extracted from the previous and current frames and predicts whether the blindspot is occupied.
 
 ### Design Goals
 
 - Learn temporal scene changes
 - Fuse information from consecutive frames
-- Produce robust occupancy predictions
+- Produce occupancy predictions
 - Remain computationally lightweight
 
 ### Inputs
 
-```python
+```text
 feature_prev : (B, 256, 16, 32)
 feature_curr : (B, 256, 16, 32)
 ```
 
+The feature maps are concatenated along the channel dimension before being processed by the head.
+
 ### Output
 
-```python
-occupancy_logits : (B, 2)
+```text
+occupancy_logit : (B, 1)
 ```
 
 ### Prediction Mapping
-
-```text
-0 → FREE
-1 → OCCUPIED
-```
-
-The head returns raw logits intended for:
-
-```python
-nn.CrossEntropyLoss()
-```
-
----
-
-# Training
-
-## Labels
 
 ```text
 FREE      = 0
 OCCUPIED  = 1
 ```
 
-Expected label type:
+The head returns a single raw occupancy logit. Applying sigmoid converts the logit into the predicted probability of the blindspot being occupied.
+
+The output is intended for:
 
 ```python
-torch.long
+torch.nn.BCEWithLogitsLoss()
 ```
 
-## Loss Function
+## Training
 
-```python
-nn.CrossEntropyLoss()
+### Labels
+
+```text
+FREE      = 0
+OCCUPIED  = 1
 ```
 
-No softmax layer is used inside the network because the loss function applies it internally.
+The target supplied to `BCEWithLogitsLoss` must be floating point and have the same shape as the model output:
 
----
+```text
+(B, 1)
+```
 
-# Example Usage
+### Loss Function
 
 ```python
+torch.nn.BCEWithLogitsLoss()
+```
+
+No sigmoid layer is used inside the network because `BCEWithLogitsLoss` applies the sigmoid operation internally.
+
+## Example Usage
+
+```python
+import torch
+
+from Models.model_components.blindspot.blindspot_network import BlindSpot
+
 model = BlindSpot()
 
-occupancy_logits = model(
+occupancy_logit = model(
     image_prev,
     image_curr,
 )
 
-prediction = occupancy_logits.argmax(dim=1)
+occupancy_probability = torch.sigmoid(occupancy_logit)
 ```
 
----
+A binary class decision requires an externally selected probability threshold. The model does not define that threshold.
 
-# Design Philosophy
+Example loss calculation:
 
-BlindSpot V1 is intentionally simple.
+```python
+target = occupancy.float().unsqueeze(1)
+criterion = torch.nn.BCEWithLogitsLoss()
+loss = criterion(occupancy_logit, target)
+```
+
+## Design Philosophy
+
+BlindSpot v1 is intentionally simple.
 
 Key principles:
 

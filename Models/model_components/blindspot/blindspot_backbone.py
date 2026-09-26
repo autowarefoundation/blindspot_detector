@@ -1,7 +1,14 @@
+"""BlindSpot occupancy classification backbone.
+
+Defines :class:`BlindSpotBackbone`, which extracts a compact P5 feature map
+from a single fisheye image for downstream temporal fusion in the
+BlindSpotHead.
+"""
+
 import torch
 import torch.nn as nn
 
-from Models.model_components.common_layers import (
+from Models.model_components.blindspot.common_layers import (
     Conv,
     SPPF,
     C2PSA,
@@ -10,10 +17,7 @@ from Models.model_components.common_layers import (
 
 
 class BlindSpotBackbone(nn.Module):
-    """
-    BlindSpot backbone.
-
-    Identical to AutoDriveBackbone.
+    """BlindSpot backbone.
     Extracts a compact P5 feature representation from a single fisheye image.
 
     Input
@@ -32,6 +36,13 @@ class BlindSpotBackbone(nn.Module):
     """
 
     def __init__(self, width, depth, csp):
+        """Build the P1-P5 feature extraction stages.
+
+        Args:
+            width: Per-stage channel widths indexed from the stem to P5.
+            depth: Per-stage repeat counts for the CTX blocks.
+            csp: CSP configuration values passed through to the CTX blocks.
+        """
         super().__init__()
 
         # p1/2
@@ -123,7 +134,6 @@ class BlindSpotBackbone(nn.Module):
                 s=2,
                 p=1,
             ),
-
             # Context-aware feature extraction
             CTX(
                 width[5],
@@ -134,13 +144,11 @@ class BlindSpotBackbone(nn.Module):
                 h=16,
                 w=32,
             ),
-
             # Multi-scale context aggregation
             SPPF(
                 width[5],
                 width[5],
             ),
-
             # Attention-based feature refinement
             C2PSA(
                 width[5],
@@ -149,9 +157,16 @@ class BlindSpotBackbone(nn.Module):
         )
 
     def forward(self, x):
+        """Run the image through all downsampling stages.
+
+        Args:
+            x: Input fisheye image batch of shape (B, 3, 512, 1024).
+
+        Returns:
+            The P5 feature map of shape (B, 256, 16, 32).
+        """
         # Input image
         # x: (B, 3, 512, 1024)
-
         p1 = self.p1(x)     # (B, 16, 256, 512)
         p2 = self.p2(p1)    # (B, 64, 128, 256)
         p3 = self.p3(p2)    # (B, 128, 64, 128)
