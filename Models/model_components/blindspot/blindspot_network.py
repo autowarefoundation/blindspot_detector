@@ -5,13 +5,13 @@ the :class:`BlindSpotHead` temporal fusion head into a single end-to-end
 model operating on consecutive frame pairs.
 """
 
-from pathlib import Path
 
 import torch
 import torch.nn as nn
 
 from Models.model_components.blindspot.blindspot_backbone import BlindSpotBackbone
 from Models.model_components.blindspot.blindspot_head import BlindSpotHead
+
 
 IMAGE_WIDTH = 1024
 IMAGE_HEIGHT = 512
@@ -23,7 +23,8 @@ _CSP = [False, True]
 
 
 class BlindSpot(nn.Module):
-    """BlindSpot occupancy classification model.
+    """
+    BlindSpot occupancy classification model.
 
     A shared backbone processes two consecutive frames (t-1, t).
     The resulting P5 feature maps are fused by BlindSpotHead to
@@ -37,27 +38,27 @@ class BlindSpot(nn.Module):
     Output
     ------
     occupancy_logits : (B, 1)
+
         Raw occupancy logit per sample (BCEWithLogitsLoss vs
         {FREE=0, OCCUPIED=1}).
+
         sigmoid(logit) -> probability occupied.
-        No sigmoid is applied here - BCEWithLogitsLoss applies the
-        sigmoid operation internally during training.
+
+    No sigmoid is applied here. BCEWithLogitsLoss applies the
+    sigmoid operation internally during training.
     """
 
     def __init__(self):
-        """Instantiate the shared backbone and the occupancy head.
+        """
+        Instantiate the shared backbone and the occupancy head.
 
-        The head is sized from the module-level image constants, since the
-        backbone applies a total stride of 32.
+        The head is sized from the module-level image constants,
+        since the backbone applies a total stride of 32.
         """
         super().__init__()
 
         # Shared feature extractor for image(t-1) and image(t)
-        self.backbone = BlindSpotBackbone(
-            _WIDTH,
-            _DEPTH,
-            _CSP,
-        )
+        self.backbone = BlindSpotBackbone(_WIDTH, _DEPTH, _CSP)
 
         # BlindSpot occupancy classification head
         self.head = BlindSpotHead(
@@ -95,9 +96,6 @@ class BlindSpot(nn.Module):
         feature_curr = self.backbone(image_curr)
 
         # Temporal fusion + occupancy classification
-        occupancy_logits = self.head(
-            feature_prev,
-            feature_curr,
-        )
+        occupancy_logits = self.head(feature_prev, feature_curr)
 
         return occupancy_logits
