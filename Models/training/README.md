@@ -2,16 +2,33 @@
 
 ## Overview
 
-This directory contains the training framework used by the BlindSpot occupancy-classification model.
+This directory contains the training pipeline for the BlindSpot occupancy-classification model.
 
-BlindSpot is a binary classification task that predicts whether a vehicle blindspot is:
+BlindSpot is a binary classification task that predicts whether the vehicle blindspot is:
 
 ```text
 FREE      = 0
 OCCUPIED  = 1
 ```
 
-Unlike object-detection models, BlindSpot predicts a single occupancy state. The training pipeline is therefore focused on binary classification, optimization stability, validation, checkpointing, and experiment monitoring.
+The model consumes two consecutive fisheye camera frames:
+
+```text
+image_prev
+image_curr
+```
+
+and predicts a single blindspot occupancy state.
+
+The training pipeline focuses on:
+
+- Training and validation
+- Optimization
+- Checkpoint management
+- Experiment tracking
+- TensorBoard logging
+
+Dataset parsing and metadata generation are handled separately and are not part of this training pipeline.
 
 ## Repository Structure
 
@@ -20,66 +37,96 @@ train_blindspot.py
     Main training entry point and epoch loop
 
 blindspot_trainer.py
-    Model training, validation, checkpointing, and TensorBoard utilities
+    Training, validation, checkpointing,
+    visualization, and TensorBoard logging
 ```
+
+The trainer uses the BlindSpot model implementation and `BlindSpotDataset` from their respective model and data-parsing packages.
 
 ## Training Workflow
 
 ```text
-WoodScape Dataset
-        │
-        ▼
-LoadDataBlindSpot
-        │
-        ├── Training DataLoader
-        └── Validation DataLoader
-                │
-                ▼
-        BlindSpot Network
-                │
-                ▼
-       BCEWithLogitsLoss
-                │
-                ▼
-          Adam Optimizer
-                │
-                ▼
-           Validation
-                │
-                ▼
-          Checkpointing
+train_metadata.json       val_metadata.json
+          │                        │
+          ▼                        ▼
+  BlindSpotDataset        BlindSpotDataset
+          │                        │
+          ▼                        ▼
+ Training DataLoader      Validation DataLoader
+          │                        │
+          ▼                        │
+    BlindSpot Network              │
+          │                        │
+          ▼                        │
+   BCEWithLogitsLoss               │
+          │                        │
+          ▼                        │
+     Adam Optimizer                │
+          │                        │
+          └────────► Validation ◄──┘
+                         │
+                         ▼
+                    Checkpointing
 ```
 
 Validation is performed after every training epoch.
 
-## `train_blindspot.py`
+## Model Output
 
-### Purpose
-
-`train_blindspot.py` is the main entry point for BlindSpot training and validation. It creates the output directories, loads the dataset, builds the dataloaders, manages checkpoint loading, and runs the training and validation loops.
-
-### Responsibilities
-
-#### Dataset Loading
-
-The training script creates the dataset through:
-
-```python
-LoadDataBlindSpot(args.root)
-```
-
-It expects the returned object to provide:
+The BlindSpot network produces a single raw occupancy logit:
 
 ```text
-data.train
-data.val
+occupancy_logit : (B, 1)
 ```
 
-The training loader uses shuffling, while the validation loader does not.
+Class mapping:
 
-#### Training
+```text
+0 → FREE
+1 → OCCUPIED
+```
 
-During each training iteration:
+A sigmoid function converts the logit into an occupancy probability:
+
+```python
+occupied_probability = torch.sigmoid(occupancy_logit)
+```
+
+Predictions are generated using a probability threshold of `0.5`:
+
+```python
+prediction = occupied_probability >= 0.5
+```
+
+## Loss Function
+
+BlindSpot uses:
+
+```python
+torch.nn.BCEWithLogitsLoss()
+```
+
+The model returns a raw logit. No sigmoid is applied before the loss because `BCEWithLogitsLoss` performs the sigmoid operation internally in a numerically stable manner.
+
+Occupancy labels are converted to floating-point targets shaped `(B, 1)` before loss calculation.
+
+## Optimizer
+
+Training uses Adam:
+
+```python
+torch.optim.Adam(
+    trainable_parameters,
+    lr=1e-4,
+    weight_decay=1e-5,
+)
+```
+
+Only parameters with `requires_grad=True` are optimized.
+
+## Training Loop
+
+Each training iteration performs:
 
 ```text
 Load Batch
@@ -95,20 +142,46 @@ Gradient Clipping
 Optimizer Update
 ```
 
-Gradients are clipped to a maximum norm of `10.0` before each optimizer step.
+Gradient clipping is applied before every optimizer step:
 
-#### Validation
+```text
+max_norm = 10.0
+```
 
-Validation is executed after every epoch. The validation loop computes sample-weighted averages for:
+## Dataset Loading
 
-- Validation loss
-- Occupancy classification accuracy
+The training script requires a metadata directory containing:
 
-A probability threshold of `0.5` is used to convert sigmoid probabilities into binary predictions.
+```text
+train_metadata.json
+val_metadata.json
+```
 
-#### Checkpointing
+Datasets are created with:
 
-Training outputs are written under:
+```python
+train_dataset = BlindSpotDataset(metadata_dir / "train_metadata.json")
+val_dataset = BlindSpotDataset(metadata_dir / "val_metadata.json")
+```
+
+The training DataLoader uses shuffling. The validation DataLoader does not.
+
+Training stops with a `RuntimeError` if either DataLoader contains no batches.
+
+## Validation
+
+Validation runs after every epoch and reports:
+
+- Sample-weighted validation loss
+- Sample-weighted occupancy classification accuracy
+
+Sample weighting prevents a smaller final batch from disproportionately affecting the reported averages.
+
+Validation accuracy uses sigmoid probabilities and the `0.5` prediction threshold.
+
+## Checkpointing
+
+Training outputs are written to:
 
 ```text
 <root>/training/blindspot/<run-name>/
@@ -126,11 +199,21 @@ tensorboard/
 └── TensorBoard event files
 ```
 
-Checkpoint roles:
+### Checkpoint Types
 
-- `BlindSpot_last.pth`: latest completed epoch
-- `BlindSpot_best.pth`: checkpoint with the lowest validation loss
-- `BlindSpot_epochNNN.pth`: checkpoint saved after each completed epoch
+#### `BlindSpot_last.pth`
+
+Latest completed training checkpoint. It is overwritten after each epoch.
+
+#### `BlindSpot_best.pth`
+
+Checkpoint with the lowest validation loss.
+
+#### `BlindSpot_epochNNN.pth`
+
+Archive checkpoint saved after each completed epoch.
+
+### Stored State
 
 A full checkpoint stores:
 
@@ -142,115 +225,45 @@ A full checkpoint stores:
 
 The trainer can also load a weights-only BlindSpot checkpoint. In that case, optimizer state and training counters are reset.
 
-### Resume Options
+### Resume Support
 
-An explicit checkpoint takes precedence over automatic resume:
-
-```text
---checkpoint <path>
-```
-
-Automatic resume loads `BlindSpot_last.pth` from the selected run directory:
+Automatic resume:
 
 ```text
 --resume
 ```
 
-If the requested checkpoint is unavailable, training starts from a fresh state.
+loads `BlindSpot_last.pth` from the selected run directory.
 
-Weights from AutoDrive or AutoSpeed models are not loaded by this training pipeline.
-
-## `blindspot_trainer.py`
-
-### Purpose
-
-`blindspot_trainer.py` contains the training, validation, optimization, checkpointing, and TensorBoard logic used by the main training script.
-
-### Model and Device
-
-The trainer creates the `BlindSpot` model and selects the runtime device automatically:
-
-```python
-torch.device("cuda" if torch.cuda.is_available() else "cpu")
-```
-
-### Batch Preparation
-
-Each batch contains:
+Explicit checkpoint loading:
 
 ```text
-image_prev
-image_curr
-occupancy
+--checkpoint <path>
 ```
 
-Occupancy labels are converted to floating-point targets shaped `(B, 1)` for binary-logit training.
+loads the specified BlindSpot checkpoint. If both `--checkpoint` and `--resume` are provided, the explicit checkpoint takes precedence.
 
-### Loss Function
-
-BlindSpot is trained using:
-
-```python
-torch.nn.BCEWithLogitsLoss()
-```
-
-The model produces a single raw occupancy logit:
-
-```text
-occupancy_logit : (B, 1)
-```
-
-`BCEWithLogitsLoss` applies the sigmoid operation internally. Sigmoid is therefore not applied before calculating the training loss.
-
-### Optimizer
-
-BlindSpot uses the Adam optimizer:
-
-```python
-torch.optim.Adam(
-    trainable_parameters,
-    lr=1e-4,
-    weight_decay=1e-5,
-)
-```
-
-Only parameters with `requires_grad=True` are passed to the optimizer.
-
-### Prediction
-
-During validation and visualization:
-
-```python
-occupied_probability = torch.sigmoid(occupancy_logit)
-prediction = occupied_probability >= 0.5
-```
-
-Class mapping:
-
-```text
-0 → FREE
-1 → OCCUPIED
-```
+If the requested checkpoint is unavailable, training starts from a fresh state. Weights from AutoDrive or AutoSpeed models are not loaded.
 
 ## Model Selection
 
 The best model is selected using the lowest validation loss:
 
 ```text
-best validation loss → BlindSpot_best.pth
+lowest validation loss → BlindSpot_best.pth
 ```
 
-Validation accuracy is reported for monitoring but is not used for best-checkpoint selection.
+Validation accuracy is reported for monitoring but is not used for checkpoint selection.
 
 ## TensorBoard Logging
 
-TensorBoard event files are written to:
+TensorBoard logs are written to:
 
 ```text
 <root>/training/blindspot/<run-name>/tensorboard/
 ```
 
-The trainer records:
+The training pipeline records:
 
 ```text
 Loss/train_total
@@ -264,94 +277,119 @@ Visualization/sample
 Visualization/val_sample
 ```
 
-The visualizations show:
+### Logged Visualizations
+
+The visualization panel displays:
 
 - Predicted occupancy class
 - Ground-truth occupancy class
-- Confidence in the predicted class
-- Whether the prediction is correct
+- Confidence score
+- Prediction result, correct or incorrect
 
-The displayed image is the previous frame from the temporal pair.
+The displayed image is `image_prev` from the temporal pair.
 
-Start TensorBoard with the run-specific path printed by the training script:
+Start TensorBoard with:
 
 ```bash
 tensorboard --logdir <root>/training/blindspot/<run-name>/tensorboard
 ```
 
-## Training Configuration
+The training script also prints the run-specific command when it starts.
 
-Default command-line values:
-
-```text
-Epochs              : 50
-Batch size          : 16
-DataLoader workers  : 2
-Learning rate       : 1e-4
-Optimizer           : Adam
-Weight decay        : 1e-5
-Loss                : BCEWithLogitsLoss
-Gradient clip norm  : 10.0
-Prediction threshold: 0.5
-Validation          : Every epoch
-Model selection     : Lowest validation loss
-```
-
-### Command-Line Arguments
+## Default Configuration
 
 ```text
---root <path>          Required dataset root and training-output root
---run-name <name>      Run directory name
---resume               Resume from BlindSpot_last.pth
---checkpoint <path>    Load an explicit BlindSpot checkpoint
---epochs <int>         Number of epochs, default: 50
---batch-size <int>     Batch size, default: 16
---workers <int>        DataLoader workers, default: 2
---log-every <int>      Scalar and histogram interval, default: 100 steps
---vis-every <int>      Training visualization interval, default: 500 steps
+Epochs               : 50
+Batch size           : 16
+DataLoader workers   : 2
+Learning rate        : 1e-4
+Optimizer            : Adam
+Weight decay         : 1e-5
+Loss                 : BCEWithLogitsLoss
+Gradient clip norm   : 10.0
+Prediction threshold : 0.5
+Validation           : Every epoch
+Model selection      : Lowest validation loss
+Log interval         : 100 training steps
+Visualization interval: 500 training steps
 ```
 
-When `--run-name` is omitted, the script creates an automatically numbered directory such as `run001`, `run002`, or `run003`.
+## Command-Line Arguments
 
-## Example Training Runs
+```text
+--root <path>
+    Required. Root used for training outputs.
+
+--metadata-dir <path>
+    Required. Directory containing train_metadata.json and val_metadata.json.
+
+--run-name <name>
+    Run directory name. If omitted, the script creates run001, run002, and so on.
+
+--resume
+    Resume from BlindSpot_last.pth in the selected run directory.
+
+--checkpoint <path>
+    Load an explicit BlindSpot checkpoint. Overrides --resume.
+
+--epochs <int>
+    Number of training epochs. Default: 50.
+
+--batch-size <int>
+    Batch size. Default: 16.
+
+--workers <int>
+    Number of DataLoader workers. Default: 2.
+
+--log-every <int>
+    Log training scalars and histograms every N training steps. Default: 100.
+
+--vis-every <int>
+    Save a training visualization every N training steps. Default: 500.
+```
+
+## Example Usage
 
 ### Start a New Run
 
 ```bash
-python train_blindspot.py     --root <dataset-root>
+python train_blindspot.py     --root training_output     --metadata-dir metadata/blindspot
 ```
 
-### Use a Named Run
+When `--run-name` is omitted, the script automatically creates a numbered run directory such as `run001`.
+
+### Start a Named Run
 
 ```bash
-python train_blindspot.py     --root <dataset-root>     --run-name baseline
+python train_blindspot.py     --root training_output     --metadata-dir metadata/blindspot     --run-name baseline
 ```
 
-### Resume a Run
+### Resume Training
 
-Use the same root and run name so the script can locate that run's `BlindSpot_last.pth`:
+Use the same root and run name so the script can locate the run's `BlindSpot_last.pth`:
 
 ```bash
-python train_blindspot.py     --root <dataset-root>     --run-name baseline     --resume
+python train_blindspot.py     --root training_output     --metadata-dir metadata/blindspot     --run-name baseline     --resume
 ```
 
 ### Load an Explicit Checkpoint
 
 ```bash
-python train_blindspot.py     --root <dataset-root>     --run-name continued     --checkpoint <path-to-checkpoint>
+python train_blindspot.py     --root training_output     --metadata-dir metadata/blindspot     --run-name continued     --checkpoint <path-to-checkpoint>
 ```
 
 `--checkpoint` takes precedence when both `--checkpoint` and `--resume` are provided.
 
 ## Design Principles
 
-BlindSpot Training Pipeline v1 prioritizes:
+The BlindSpot training pipeline v1 prioritizes:
 
-- Simple binary occupancy classification
+- Binary occupancy classification
 - Temporal reasoning from consecutive frames
 - Sample-weighted validation
-- Reliable checkpointing and resume support
+- Reliable checkpointing
+- Resume support
 - Lightweight TensorBoard monitoring
-- A focused training pipeline without object-detection utilities
+- Independence from AutoDrive and AutoSpeed model weights
 
-The training pipeline provides a baseline that can be extended with additional metrics, scheduling, class-balancing strategies, or other optimization techniques.
+The implementation provides a baseline that can be extended with additional metrics, learning-rate scheduling, class-balancing strategies, focal loss, mixed-precision training, or deployment-specific optimizations.

@@ -46,19 +46,13 @@ import tqdm
 from torch.utils.data import DataLoader
 
 # Make the repository root importable when this file is executed directly.
-sys.path.insert(
-    0,
-    str(Path(__file__).resolve().parents[2]),
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from Models.data_parsing.load_woodscape import LoadDataBlindSpot
+from Models.data_parsing.load_woodscape import BlindSpotDataset
 from Models.training.blindspot_trainer import BlindSpotTrainer
 
 
-def _run_val(
-    trainer: BlindSpotTrainer,
-    loader: DataLoader,
-) -> tuple[float, float]:
+def _run_val(trainer: BlindSpotTrainer, loader: DataLoader):
     """
     Compute sample-weighted validation loss and accuracy.
 
@@ -88,68 +82,30 @@ def _run_val(
     if total_samples == 0:
         return 0.0, 0.0
 
-    return (
-        total_loss / total_samples,
-        total_accuracy / total_samples,
-    )
+    return total_loss / total_samples, total_accuracy / total_samples
 
 
 def main():
     """Parse arguments, build the data pipeline and run the training loop."""
     parser = ArgumentParser()
-    parser.add_argument(
-        "--root",
-        required=True,
-        help=(
-            "BlindSpot dataset root. Training outputs are written to "
-            "{root}/training/blindspot/<run-name>/"
-        ),
-    )
-    parser.add_argument(
-        "--run-name",
-        default="",
-        help=(
-            "Sub-folder name for this run "
-            "(default: auto-numbered run001, run002, ...)"
-        ),
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume from BlindSpot_last.pth in the run directory",
-    )
-    parser.add_argument(
-        "--checkpoint",
-        default="",
-        help="Explicit BlindSpot checkpoint path (overrides --resume)",
-    )
-    parser.add_argument(
-        "--epochs",
-        type=int,
-        default=50,
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=16,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=2,
-    )
-    parser.add_argument(
-        "--log-every",
-        type=int,
-        default=100,
-        help="Log per-step scalars and histograms every N steps",
-    )
-    parser.add_argument(
-        "--vis-every",
-        type=int,
-        default=500,
-        help="Save visualization image to TensorBoard every N steps",
-    )
+
+    parser.add_argument("--root", required=True,
+                        help="BlindSpot dataset root. Training outputs are written to {root}/training/blindspot/<run-name>/")
+    parser.add_argument("--metadata-dir", required=True,
+                        help="Directory containing train_metadata.json and val_metadata.json")
+    parser.add_argument("--run-name", default="",
+                        help="Sub-folder name for this run (default: auto-numbered run001, run002, ...)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from BlindSpot_last.pth in the run directory")
+    parser.add_argument("--checkpoint", default="",
+                        help="Explicit BlindSpot checkpoint path (overrides --resume)")
+    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--log-every", type=int, default=100,
+                        help="Log per-step scalars and histograms every N steps")
+    parser.add_argument("--vis-every", type=int, default=500,
+                        help="Save visualization image to TensorBoard every N steps")
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
@@ -168,14 +124,8 @@ def main():
     ckpt_dir = run_dir / "checkpoints"
     tb_dir = run_dir / "tensorboard"
 
-    ckpt_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-    tb_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    tb_dir.mkdir(parents=True, exist_ok=True)
 
     ckpt_last = str(ckpt_dir / "BlindSpot_last.pth")
     ckpt_best = str(ckpt_dir / "BlindSpot_best.pth")
@@ -188,21 +138,22 @@ def main():
     # ------------------------------------------------------------------
     # Dataset + DataLoaders
     # ------------------------------------------------------------------
-    data = LoadDataBlindSpot(args.root)
+
+    metadata_dir = Path(args.metadata_dir)
+
+    train_dataset = BlindSpotDataset(metadata_dir / "train_metadata.json")
+    val_dataset = BlindSpotDataset(metadata_dir / "val_metadata.json")
 
     train_loader = DataLoader(
-        data.train,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.workers,
-    )
-    val_loader = DataLoader(
-        data.val,
-        batch_size=args.batch_size,
-        shuffle=False,
+        train_dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers,
     )
 
+    val_loader = DataLoader(
+        val_dataset, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.workers,
+    )
+    
     if len(train_loader) == 0:
         raise RuntimeError("Training DataLoader contains no batches.")
 
@@ -211,23 +162,21 @@ def main():
 
     steps_per_epoch = len(train_loader)
 
-    print(f"Train samples      : {len(data.train):,}")
-    print(f"Validation samples : {len(data.val):,}")
+    print(f"Train samples      : {len(train_dataset):,}")
+    print(f"Validation samples : {len(val_dataset):,}")
     print(f"Steps per epoch    : {steps_per_epoch:,}")
 
     # ------------------------------------------------------------------
     # Trainer
     # ------------------------------------------------------------------
-    trainer = BlindSpotTrainer(
-        tensorboard_dir=str(tb_dir),
-    )
+    trainer = BlindSpotTrainer(tensorboard_dir=str(tb_dir))
     trainer.zero_grad()
 
     # Resume state
     start_epoch = 0
     global_step = 0
     best_val_loss = float("inf")
-
+    
     resume_path = ""
 
     # An explicit --checkpoint takes precedence over --resume.
@@ -235,45 +184,29 @@ def main():
         if Path(args.checkpoint).exists():
             resume_path = args.checkpoint
         else:
-            print(
-                f"  WARNING: --checkpoint not found: "
-                f"{args.checkpoint}"
-            )
+            print(f"  WARNING: --checkpoint not found: {args.checkpoint}")
     elif args.resume:
         if Path(ckpt_last).exists():
             resume_path = ckpt_last
         else:
-            print(
-                "  --resume: no BlindSpot_last.pth "
-                "found, starting fresh."
-            )
+            print("  --resume: no BlindSpot_last.pth found, starting fresh.")
 
     if resume_path:
-        (
-            start_epoch,
-            global_step,
-            best_val_loss,
-        ) = trainer.load_checkpoint(resume_path)
+        start_epoch, global_step, best_val_loss = trainer.load_checkpoint(resume_path)
 
     # ------------------------------------------------------------------
     # Training loop
     # ------------------------------------------------------------------
-    for epoch in range(
-        start_epoch,
-        args.epochs,
-    ):
+    for epoch in range(start_epoch, args.epochs):
         print(f"\n{'=' * 60}")
-        print(
-            f"Epoch {epoch + 1}/{args.epochs}  "
-            f"(global_step={global_step})"
-        )
+        print(f"Epoch {epoch + 1}/{args.epochs}  "
+              f"(global_step={global_step})")
 
         trainer.set_train_mode()
         trainer.reset_averages()
 
         p_bar = tqdm.tqdm(
-            train_loader,
-            total=steps_per_epoch,
+            train_loader, total=steps_per_epoch,
             desc=f"Epoch {epoch + 1}/{args.epochs}",
         )
 
@@ -301,22 +234,9 @@ def main():
         trainer.log_train_epoch(epoch + 1)
 
         # Save checkpoint every epoch
-        trainer.save_checkpoint(
-            ckpt_last,
-            epoch + 1,
-            global_step,
-            best_val_loss,
-        )
-
-        ckpt_epoch = str(
-            ckpt_dir / f"BlindSpot_epoch{epoch + 1:03d}.pth"
-        )
-        trainer.save_checkpoint(
-            ckpt_epoch,
-            epoch + 1,
-            global_step,
-            best_val_loss,
-        )
+        trainer.save_checkpoint(ckpt_last, epoch + 1, global_step, best_val_loss)
+        ckpt_epoch = str(ckpt_dir / f"BlindSpot_epoch{epoch + 1:03d}.pth")
+        trainer.save_checkpoint(ckpt_epoch, epoch + 1, global_step, best_val_loss)
 
         # ------------------------------------------------------------------
         # Validation
@@ -326,20 +246,10 @@ def main():
         trainer.set_eval_mode()
 
         with torch.no_grad():
-            val_loss, val_accuracy = _run_val(
-                trainer,
-                val_loader,
-            )
+            val_loss, val_accuracy = _run_val(trainer, val_loader)
 
-        trainer.log_val_epoch(
-            val_loss,
-            val_accuracy,
-            epoch + 1,
-        )
-        trainer.save_visualization(
-            epoch + 1,
-            split="val",
-        )
+        trainer.log_val_epoch(val_loss, val_accuracy, epoch + 1)
+        trainer.save_visualization(epoch + 1, split="val")
 
         print(
             f"  [Val] loss {val_loss:.4f}  "
@@ -349,18 +259,8 @@ def main():
         # Track the best-performing checkpoint separately.
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-
-            trainer.save_checkpoint(
-                ckpt_best,
-                epoch + 1,
-                global_step,
-                best_val_loss,
-            )
-
-            print(
-                f"  *** New best val loss: "
-                f"{best_val_loss:.4f} → BlindSpot_best.pth"
-            )
+            trainer.save_checkpoint(ckpt_best, epoch + 1, global_step, best_val_loss)
+            print(f"  *** New best val loss: {best_val_loss:.4f} → BlindSpot_best.pth")
 
         trainer.set_train_mode()
 

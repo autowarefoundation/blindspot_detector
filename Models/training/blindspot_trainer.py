@@ -179,17 +179,11 @@ class BlindSpotTrainer:
         self.image_curr = batch["image_curr"].to(self.device)
 
         # BCEWithLogitsLoss expects float targets shaped like the logits (B, 1).
-        self.occupancy_gt = (
-            batch["occupancy"]
-            .to(
-                device=self.device,
-                dtype=torch.float32,
-            )
-            .view(-1, 1)
-        )
+        self.occupancy_gt = batch["occupancy"].to(
+            device=self.device, dtype=torch.float32
+        ).view(-1, 1)
 
-        # Retain one image and label for TensorBoard
-        # visualizations.
+        # Retain one image and label for TensorBoard visualizations.
         self._img_prev_vis = batch["image_prev"][0]
         self._occupancy_gt_val = int(batch["occupancy"][0].item())
 
@@ -197,25 +191,14 @@ class BlindSpotTrainer:
     # Forward + loss
     # ------------------------------------------------------------------
     def run_model(self):
-        """
-        Run the BlindSpot network and compute the occupancy
-        classification loss.
-        """
-        occupancy_logits = self.model(
-            self.image_prev,
-            self.image_curr,
-        )
-
-        self.loss = self._classification_loss(
-            occupancy_logits,
-            self.occupancy_gt,
-        )
+        """Run the BlindSpot network and compute the occupancy classification loss."""
+        occupancy_logits = self.model(self.image_prev, self.image_curr)
+        self.loss = self._classification_loss(occupancy_logits, self.occupancy_gt)
 
         batch_size = self.image_prev.size(0)
         self.avg_total.update(self.loss.item(), batch_size)
 
-        # Store predictions for TensorBoard logging and
-        # lightweight visualization.
+        # Store predictions for TensorBoard logging and lightweight visualization.
         with torch.no_grad():
             self._occupancy_logits_cpu = occupancy_logits.detach().cpu()
 
@@ -234,12 +217,8 @@ class BlindSpotTrainer:
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
-    def validate(
-        self,
-        batch: dict,
-    ) -> tuple:
-        """
-        Evaluate one validation batch.
+    def validate(self, batch: dict) -> tuple:
+        """Evaluate one validation batch.
 
         Args:
             batch: Validation batch in the same format as training batches.
@@ -250,15 +229,8 @@ class BlindSpotTrainer:
         """
         self.set_batch(batch)
 
-        occupancy_logits = self.model(
-            self.image_prev,
-            self.image_curr,
-        )
-
-        loss = self._classification_loss(
-            occupancy_logits,
-            self.occupancy_gt,
-        )
+        occupancy_logits = self.model(self.image_prev, self.image_curr)
+        loss = self._classification_loss(occupancy_logits, self.occupancy_gt)
 
         occupied_probabilities = torch.sigmoid(occupancy_logits)
         predictions = (occupied_probabilities >= 0.5).long()
@@ -279,10 +251,7 @@ class BlindSpotTrainer:
         else:
             self._occupancy_confidence = 1.0 - probability_occupied
 
-        return (
-            loss.item(),
-            accuracy,
-        )
+        return loss.item(), accuracy
 
     # ------------------------------------------------------------------
     # Gradient helpers
@@ -299,8 +268,7 @@ class BlindSpotTrainer:
 
         if all_params:
             self._grad_norm = torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(),
-                max_norm=10.0,
+                self.model.parameters(), max_norm=10.0
             ).item()
         else:
             self._grad_norm = 0.0
@@ -331,18 +299,12 @@ class BlindSpotTrainer:
     # Persistence
     # ------------------------------------------------------------------
     def save_checkpoint(
-        self,
-        path: str,
-        epoch: int,
-        global_step: int,
-        best_val_loss: float,
+        self, path: str, epoch: int, global_step: int, best_val_loss: float
     ):
-        """
-        Save a complete BlindSpot training checkpoint.
+        """Save a complete BlindSpot training checkpoint.
 
-        The model and optimizer states are saved together so
-        training can resume without resetting optimisation
-        progress.
+        The model and optimizer states are saved together so training can
+        resume without resetting optimisation progress.
 
         Args:
             path: Destination file path for the checkpoint.
@@ -363,12 +325,8 @@ class BlindSpotTrainer:
             path,
         )
 
-    def load_checkpoint(
-        self,
-        path: str,
-    ) -> tuple[int, int, float]:
-        """
-        Load a BlindSpot checkpoint.
+    def load_checkpoint(self, path: str) -> tuple[int, int, float]:
+        """Load a BlindSpot checkpoint.
 
         Full training checkpoints restore:
             model weights
@@ -377,8 +335,8 @@ class BlindSpotTrainer:
             global step
             best validation loss
 
-        Weights-only BlindSpot checkpoints restore model weights
-        and reset the training counters.
+        Weights-only BlindSpot checkpoints restore model weights and reset the
+        training counters.
 
         Args:
             path: Path to the checkpoint file.
@@ -391,9 +349,7 @@ class BlindSpotTrainer:
         print(f"Loading checkpoint <- {path}")
 
         checkpoint = torch.load(
-            path,
-            map_location=self.device,
-            weights_only=False,
+            path, map_location=self.device, weights_only=False
         )
 
         if isinstance(checkpoint, dict) and "model" in checkpoint:
@@ -408,24 +364,14 @@ class BlindSpotTrainer:
                     "(missing state or parameter groups changed)."
                 )
 
-            start_epoch = checkpoint.get(
-                "epoch",
-                0,
-            )
-            global_step = checkpoint.get(
-                "global_step",
-                0,
-            )
-            best_val_loss = checkpoint.get(
-                "best_val_loss",
-                float("inf"),
-            )
+            start_epoch = checkpoint.get("epoch", 0)
+            global_step = checkpoint.get("global_step", 0)
+            best_val_loss = checkpoint.get("best_val_loss", float("inf"))
 
             print(
                 f"  Resuming epoch {start_epoch + 1}, "
                 f"step {global_step}, "
-                f"best validation loss "
-                f"{best_val_loss:.4f}"
+                f"best validation loss {best_val_loss:.4f}"
             )
         else:
             # A weights-only checkpoint can initialize another
@@ -437,159 +383,82 @@ class BlindSpotTrainer:
             global_step = 0
             best_val_loss = float("inf")
 
-            print(
-                "  Weights-only BlindSpot checkpoint - "
-                "training counters reset."
-            )
+            print("  Weights-only BlindSpot checkpoint - training counters reset.")
 
-        return (
-            start_epoch,
-            global_step,
-            best_val_loss,
-        )
+        return start_epoch, global_step, best_val_loss
 
-    def save_model(
-        self,
-        path: str,
-    ):
-        """
-        Save BlindSpot model weights without optimizer or
-        training-progress state.
+    def save_model(self, path: str):
+        """Save BlindSpot model weights without optimizer or progress state.
 
         Args:
             path: Destination file path for the weights.
         """
-        torch.save(
-            self.model.state_dict(),
-            path,
-        )
+        torch.save(self.model.state_dict(), path)
 
     # ------------------------------------------------------------------
     # TensorBoard - per step
     # ------------------------------------------------------------------
-    def log_train_step(
-        self,
-        step: int,
-    ):
-        """
-        Per-step training diagnostics.
-
-        The BlindSpot baseline tracks only the total
-        classification loss and gradient norm.
+    def log_train_step(self, step: int):
+        """Log per-step training loss and gradient norm.
 
         Args:
             step: Global training step used as the TensorBoard x-axis.
         """
-        self.writer.add_scalar(
-            "Loss/train_total",
-            self.get_loss(),
-            step,
-        )
-        self.writer.add_scalar(
-            "Metrics/grad_norm",
-            self._grad_norm,
-            step,
-        )
+        self.writer.add_scalar("Loss/train_total", self.get_loss(), step)
+        self.writer.add_scalar("Metrics/grad_norm", self._grad_norm, step)
 
-    def log_histograms(
-        self,
-        step: int,
-    ):
-        """
-        Output-distribution histograms.
+    def log_histograms(self, step: int):
+        """Log the distribution of raw occupancy logits.
 
-        The BlindSpot classifier predicts a single
-        occupancy logit per sample.
-
-        Logging raw occupancy logits helps identify:
-        - collapsed classifiers
-        - overconfident predictions
-        - poor class separation
-
-        Positive logits indicate OCCUPIED,
-        negative logits indicate FREE.
+        Positive logits indicate OCCUPIED and negative logits indicate FREE.
 
         Args:
             step: Global training step used as the TensorBoard x-axis.
         """
         if self._occupancy_logits_cpu is not None:
             self.writer.add_histogram(
-                "Hist/occupancy_logits",
-                self._occupancy_logits_cpu,
-                step,
+                "Hist/occupancy_logits", self._occupancy_logits_cpu, step
             )
 
     # ------------------------------------------------------------------
     # TensorBoard - per epoch
     # ------------------------------------------------------------------
-    def log_train_epoch(
-        self,
-        epoch: int,
-    ):
-        """
-        Log epoch-level training statistics.
+    def log_train_epoch(self, epoch: int):
+        """Log epoch-level training statistics.
 
         Args:
             epoch: Index of the completed training epoch.
         """
-        self.writer.add_scalar(
-            "Loss/train_avg_total",
-            self.avg_total.avg,
-            epoch,
-        )
-        self.writer.add_scalar(
-            "Metrics/lr",
-            self.learning_rate,
-            epoch,
-        )
+        self.writer.add_scalar("Loss/train_avg_total", self.avg_total.avg, epoch)
+        self.writer.add_scalar("Metrics/lr", self.learning_rate, epoch)
         self.writer.flush()
 
-    def log_val_epoch(
-        self,
-        val_loss: float,
-        accuracy: float,
-        epoch: int,
-    ):
-        """
-        Log validation metrics for BlindSpot occupancy
-        classification.
+    def log_val_epoch(self, val_loss: float, accuracy: float, epoch: int):
+        """Log validation metrics for BlindSpot occupancy classification.
 
         Args:
             val_loss: Validation loss for the epoch.
             accuracy: Validation accuracy in percent.
             epoch: Index of the completed epoch.
         """
-        self.writer.add_scalar(
-            "Loss/val_total",
-            val_loss,
-            epoch,
-        )
-        self.writer.add_scalar(
-            "Metrics/accuracy_%",
-            accuracy,
-            epoch,
-        )
+        self.writer.add_scalar("Loss/val_total", val_loss, epoch)
+        self.writer.add_scalar("Metrics/accuracy_%", accuracy, epoch)
         self.writer.flush()
 
     # ------------------------------------------------------------------
     # Visualization
     # ------------------------------------------------------------------
-    def save_visualization(
-        self,
-        step: int,
-        split: str = "train",
-    ):
-        """
-        Write one annotated BlindSpot sample to TensorBoard.
+    def save_visualization(self, step: int, split: str = "train"):
+        """Write one annotated BlindSpot sample to TensorBoard.
 
         The visualization shows:
             predicted occupancy
             ground-truth occupancy
             confidence of the predicted class
 
-        The displayed frame is the previous image from the
-        temporal pair. It provides scene context for inspecting
-        the model prediction without altering the training data.
+        The displayed frame is the previous image from the temporal pair. It
+        provides scene context for inspecting the model prediction without
+        altering the training data.
 
         Args:
             step: Global step used as the TensorBoard x-axis.
@@ -598,11 +467,7 @@ class BlindSpotTrainer:
         if self._img_prev_vis is None:
             return
 
-        class_names = (
-            "FREE",
-            "OCCUPIED",
-        )
-
+        class_names = ("FREE", "OCCUPIED")
         predicted_label = class_names[self._occupancy_pred]
         ground_truth_label = class_names[self._occupancy_gt_val]
 
@@ -614,19 +479,12 @@ class BlindSpotTrainer:
         # WoodScape images currently use ToTensor() only.
         # No inverse normalization is required before display.
         image = self._img_prev_vis.detach().cpu().permute(1, 2, 0).numpy()
-
-        figure, axis = plt.subplots(
-            1,
-            1,
-            figsize=(12, 6),
-        )
+        figure, axis = plt.subplots(1, 1, figsize=(12, 6))
         figure.patch.set_facecolor("#1e1e1e")
 
         axis.imshow(image)
         axis.set_title(
-            f"BlindSpot - {split} - step {step}",
-            color="white",
-            fontsize=10,
+            f"BlindSpot - {split} - step {step}", color="white", fontsize=10
         )
         axis.axis("off")
 
@@ -640,31 +498,17 @@ class BlindSpotTrainer:
         )
 
         axis.text(
-            10,
-            30,
-            annotation,
-            color=status_color,
-            fontsize=9,
-            family="monospace",
+            10, 30, annotation,
+            color=status_color, fontsize=9, family="monospace",
             verticalalignment="top",
-            bbox={
-                "facecolor": "black",
-                "alpha": 0.70,
-                "edgecolor": "none",
-                "pad": 5,
-            },
+            bbox=dict(facecolor="black", alpha=0.70, edgecolor="none", pad=5),
         )
 
         plt.tight_layout()
 
         # Separate tags keep training and validation samples distinguishable.
         tag = "Visualization/val_sample" if split == "val" else "Visualization/sample"
-
-        self.writer.add_figure(
-            tag,
-            figure,
-            global_step=step,
-        )
+        self.writer.add_figure(tag, figure, global_step=step)
 
         # Release the figure to avoid leaking matplotlib resources.
         plt.close(figure)
@@ -673,5 +517,5 @@ class BlindSpotTrainer:
         """Flush and close the TensorBoard writer at the end of training."""
         self.writer.flush()
         self.writer.close()
-
+        
         print("BlindSpotTrainer: finished.")
